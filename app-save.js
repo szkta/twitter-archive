@@ -30,36 +30,80 @@
         return;
     }
 
-    console.log(`>>> @${TARGET_ID} の収集を開始します...`);
+    // --- プロフィール数値の取得（自動取得 or 手動入力） ---
+    let followingCount = "0";
+    let followersCount = "0";
+    let avatarUrl = "";
+    let userName = TARGET_ID;
 
-    // プロフィール情報の器（最初は空で作成し、ツイートから取得して埋める）
+    // 1. まず現在の画面から探してみる（プロフィール画面用）
+    try {
+        // フォロー数
+        const followingLink = document.querySelector(`a[href*="/${TARGET_ID}/following"]`);
+        if (followingLink) {
+            const match = followingLink.innerText.match(/[\d,]+([.][\d]+)?([KMGT万億])?/);
+            if (match) followingCount = match[0];
+        }
+        // フォロワー数
+        const followersLink = document.querySelector(`a[href*="/${TARGET_ID}/verified_followers"]`) 
+                           || document.querySelector(`a[href*="/${TARGET_ID}/followers"]`);
+        if (followersLink) {
+            const match = followersLink.innerText.match(/[\d,]+([.][\d]+)?([KMGT万億])?/);
+            if (match) followersCount = match[0];
+        }
+        // アイコン
+        const avatarContainer = document.querySelector(`div[data-testid="UserAvatar-Container-${TARGET_ID}"]`) 
+                             || document.querySelector(`div[data-testid="UserAvatar-Container-${TARGET_ID.toLowerCase()}"]`);
+        if (avatarContainer) {
+            const img = avatarContainer.querySelector('img');
+            if (img) avatarUrl = img.src;
+        }
+        // 名前
+        const primaryCol = document.querySelector('div[data-testid="primaryColumn"]');
+        if (primaryCol) {
+            const nameEl = primaryCol.querySelector('div[data-testid="UserName"] span span');
+            if (nameEl) userName = nameEl.innerText;
+        }
+    } catch(e) {}
+
+    // 2. 取得できなかった場合（検索画面など）、ユーザーに入力してもらう
+    if (followingCount === "0" || followersCount === "0") {
+        const inputFollowing = prompt(`@${TARGET_ID} の【フォロー数】を入力してください\n(例: 212)`, followingCount !== "0" ? followingCount : "");
+        const inputFollowers = prompt(`@${TARGET_ID} の【フォロワー数】を入力してください\n(例: 2,381)`, followersCount !== "0" ? followersCount : "");
+        
+        if (inputFollowing) followingCount = inputFollowing;
+        if (inputFollowers) followersCount = inputFollowers;
+    }
+
     const profileData = {
-        name: TARGET_ID,       // 仮置き
-        screenName: "@" + TARGET_ID, // 仮置き
-        avatarUrl: ""
+        name: userName,
+        screenName: "@" + TARGET_ID,
+        avatarUrl: avatarUrl,
+        following: followingCount,
+        followers: followersCount
     };
-    let isProfileFilled = false; // プロフィール取得済みフラグ
+
+    console.log(`>>> @${TARGET_ID} の収集を開始します...`);
+    console.log("プロフィールデータ:", profileData);
+
+    // ------------------------------------------------
 
     const collectedTweets = new Map();
     let lastHeight = 0;
     let noChangeCount = 0;
 
-    // 投票データの解析
     function getPollData(article) {
         try {
             const pollRoot = article.querySelector('[data-testid="cardPoll"]');
             if (!pollRoot) return null;
-
             const options = [];
             const listItems = pollRoot.querySelectorAll('li[role="listitem"]');
             if (listItems.length === 0) return null;
-
             listItems.forEach(li => {
                 const lines = li.innerText.split('\n').filter(line => line.trim() !== "");
                 let percent = 0;
                 let label = "";
                 const percentIndex = lines.findIndex(line => /^\d+(\.\d+)?%$/.test(line));
-
                 if (percentIndex !== -1) {
                     percent = parseFloat(lines[percentIndex].replace('%', ''));
                     label = lines.slice(0, percentIndex).join(" ");
@@ -68,32 +112,21 @@
                 }
                 options.push({ label: label, percent: percent });
             });
-
             let totalVotes = 0;
             const footerText = pollRoot.innerText;
             const voteMatch = footerText.match(/([\d,]+)\s*(票|votes)/);
-            if (voteMatch) {
-                totalVotes = parseInt(voteMatch[1].replace(/,/g, ''), 10);
-            }
-
-            if (options.length > 0) {
-                return { options: options, total_votes: totalVotes };
-            }
-        } catch (e) {
-            return null;
-        }
+            if (voteMatch) totalVotes = parseInt(voteMatch[1].replace(/,/g, ''), 10);
+            if (options.length > 0) return { options: options, total_votes: totalVotes };
+        } catch (e) { return null; }
         return null;
     }
 
     function getTweetData(article) {
         try {
-            // ユーザー特定とリポスト判定
             const userLinks = article.querySelectorAll('div[data-testid="User-Name"] a');
             if (userLinks.length === 0) return null;
 
             let isTargetUser = false;
-            
-            // リンクの中からターゲットIDを含むものを探す
             for (const link of userLinks) {
                 const href = link.getAttribute('href');
                 if (href && href.toLowerCase().endsWith(`/${TARGET_ID.toLowerCase()}`)) {
@@ -101,43 +134,22 @@
                     break;
                 }
             }
-
-            // ターゲットユーザーのツイートでない場合はスキップ
-            // (検索画面などで他人のツイートが混ざるのを防ぐ)
             if (!isTargetUser) return null;
 
-            // --- プロフィール情報の補完（ツイートから取得） ---
-            if (!isProfileFilled) {
+            // ツイートからのプロフィール補完（アイコンがまだ取れていない場合のみ）
+            if (!profileData.avatarUrl) { 
                 try {
-                    // 名前とスクリーンネームの取得
-                    // User-Nameエリア内のテキストを走査
-                    const userNameDiv = article.querySelector('div[data-testid="User-Name"]');
-                    if (userNameDiv) {
-                        const textContent = userNameDiv.innerText.split('\n');
-                        if (textContent.length >= 2) {
-                            profileData.name = textContent[0]; // 1行目が表示名
-                            profileData.screenName = textContent[1]; // 2行目が@ID
-                        }
-                    }
-
-                    // アイコン画像の取得
                     const avatarImg = article.querySelector('div[data-testid="Tweet-User-Avatar"] img');
-                    if (avatarImg) {
-                        profileData.avatarUrl = avatarImg.src;
+                    if (avatarImg) profileData.avatarUrl = avatarImg.src;
+                    
+                    // 名前も念のため
+                    const userNameDiv = article.querySelector('div[data-testid="User-Name"]');
+                    if (userNameDiv && profileData.name === TARGET_ID) {
+                        profileData.name = userNameDiv.innerText.split('\n')[0];
                     }
-
-                    // 名前とアイコンが取れたらフラグを立てる（以降は処理しない）
-                    if (profileData.name && profileData.avatarUrl) {
-                        isProfileFilled = true;
-                        console.log("プロフィール情報をツイートから取得しました:", profileData);
-                    }
-                } catch (e) {
-                    console.warn("プロフィール取得試行中にエラー:", e);
-                }
+                } catch (e) {}
             }
-            // ------------------------------------------------
 
-            // テキスト
             const textEl = article.querySelector('div[data-testid="tweetText"]');
             let text = "";
             if (textEl) {
@@ -149,29 +161,25 @@
                 text = clone.innerText;
             }
 
-            // 日付・URL
             const timeEl = article.querySelector('time');
             if (!timeEl) return null;
             const date = timeEl.getAttribute('datetime');
             const tweetUrl = timeEl.closest('a').getAttribute('href');
             const id = tweetUrl.split('/').pop();
 
-            // 画像・GIF
-            const mediaFiles = [];
+            const images = [];
             article.querySelectorAll('div[data-testid="tweetPhoto"] img').forEach(img => {
                 let src = img.src;
                 if (src.includes('tweet_video_thumb')) {
                     const mp4Src = src.replace('pbs.twimg.com/tweet_video_thumb', 'video.twimg.com/tweet_video')
                                       .replace(/\.(jpg|png|webp).*/, '.mp4');
-                    mediaFiles.push(mp4Src);
+                    images.push(mp4Src);
                 } else {
-                    mediaFiles.push(src);
+                    images.push(src);
                 }
             });
 
-            // 投票
             const poll = getPollData(article);
-
             const getMetric = (testId) => {
                 const el = article.querySelector(`[data-testid="${testId}"]`);
                 return el ? (el.ariaLabel || el.innerText || "0") : "0";
@@ -182,7 +190,7 @@
                 date: date,
                 text: text,
                 url: "https://x.com" + tweetUrl,
-                images: mediaFiles,
+                images: images,
                 poll: poll,
                 metrics: {
                     reply: getMetric("reply"),
@@ -190,12 +198,9 @@
                     like: getMetric("like")
                 }
             };
-        } catch (e) {
-            return null;
-        }
+        } catch (e) { return null; }
     }
 
-    // スクロールループ
     while (true) {
         const articles = document.querySelectorAll('article[data-testid="tweet"]');
         articles.forEach(article => {

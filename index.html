@@ -10,14 +10,14 @@
         /* --- テーマ変数定義 --- */
         :root {
             /* ライトモード (デフォルト) */
-            --bg-color: #ffffff;
+            --bg-color: #f4f5f7;
             --main-text: #0f1419;
             --sub-text: #536471;
-            --border-color: #eff3f4;
+            --border-color: #cccccc;
             --accent-color: #1d9bf0;
             --hover-bg: rgba(15, 20, 25, 0.1);
-            --card-bg: #ffffff;
-            --header-bg: rgba(255, 255, 255, 0.85);
+            --card-bg: #f4f5f7;
+            --header-bg: rgba(244, 245, 247, 0.85);
             --poll-bar-bg: #cfd9de40;
             --poll-bar-fill: #cfd9de;
             --logo-color: #1d9bf0;
@@ -270,6 +270,13 @@
         .profile-avatar-large:hover {
             filter: brightness(0.9);
         }
+
+        /* フォロー・フォロワー表示 */
+        .profile-stats { display: flex; gap: 20px; margin-top: 12px; font-size: 15px; }
+        .stat-item { color: var(--sub-text); text-decoration: none; }
+        .stat-item:hover { text-decoration: underline; }
+        .stat-value { font-weight: bold; color: var(--main-text); }
+
 
         /* タブ */
         .tabs {
@@ -672,6 +679,10 @@
                             id="profileName">Name</h2>
                         <div style="color: var(--sub-text); font-size: 15px;" id="profileId">@id</div>
                     </div>
+                <div class="profile-stats">
+                    <span class="stat-item"><span class="stat-value" id="followingCount">0</span> フォロー中</span>
+                    <span class="stat-item"><span class="stat-value" id="followersCount">0</span> フォロワー</span>
+                </div>
                     <div style="font-size: 14px; color: var(--sub-text);">
                         <span id="profileDate"></span> 取得
                     </div>
@@ -797,10 +808,16 @@
             const data = loadedData[userId];
             const meta = data.meta || {};
             const history = meta.profile_history || [];
+            // 最新プロフィール
             const latest = history.length > 0 ? history[0] : { name: userId, screen_name: "@" + userId, avatar: "" };
             const avatar = latest.avatar ? latest.avatar.replace(/\\/g, '/') : 'https://abs.twimg.com/sticky/default_profile_images/default_profile_400x400.png';
             const dateStr = meta.last_updated || meta.execution_date;
             const dateDisplay = dateStr ? new Date(dateStr).toLocaleString('ja-JP') : '不明';
+
+            // ユーザー情報（JSから取得したuser_infoがあればそれを使う）
+            const userInfo = meta.user_info || {};
+            const following = userInfo.following || "-";
+            const followers = userInfo.followers || "-";
 
             document.getElementById('headerName').innerText = latest.name;
             document.getElementById('headerCount').innerText = `${meta.total_posts_retrieved || 0} 件のツイート`;
@@ -808,6 +825,10 @@
             document.getElementById('profileName').innerText = latest.name;
             document.getElementById('profileId').innerText = latest.screen_name;
             document.getElementById('profileDate').innerText = dateDisplay;
+
+            // フォロー数・フォロワー数反映
+            document.getElementById('followingCount').innerText = following;
+            document.getElementById('followersCount').innerText = followers;
         }
 
         window.switchTab = function (type) {
