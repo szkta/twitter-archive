@@ -68,8 +68,8 @@
 
     // 2. 取得できなかった場合（検索画面など）、ユーザーに入力してもらう
     if (followingCount === "0" || followersCount === "0") {
-        const inputFollowing = prompt(`@${TARGET_ID} の【フォロー数】を入力してください\n(例: 212)`, followingCount !== "0" ? followingCount : "");
-        const inputFollowers = prompt(`@${TARGET_ID} の【フォロワー数】を入力してください\n(例: 2,381)`, followersCount !== "0" ? followersCount : "");
+        const inputFollowing = prompt(`@${TARGET_ID} の【フォロー数】を入力してください\n(例: 116)`, followingCount !== "0" ? followingCount : "");
+        const inputFollowers = prompt(`@${TARGET_ID} の【フォロワー数】を入力してください\n(例: 1,160)`, followersCount !== "0" ? followersCount : "");
         
         if (inputFollowing) followingCount = inputFollowing;
         if (inputFollowers) followersCount = inputFollowers;
@@ -242,4 +242,5 @@
     link.download = `${TARGET_ID}_tweets_raw.json`;
     link.click();
     console.log(`>>> 完了！ ${result.posts.length} 件のデータを保存しました。`);
+
 })();
