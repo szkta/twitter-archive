@@ -6,12 +6,14 @@ import requests
 from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 from datetime import datetime
 
-# --- 設定エリア ------------------------------------------------
-# フォルダ内の `_tweets_raw.json` を自動で探して処理します
-# -------------------------------------------------------------
+# ==============================================================
+# 設定・概要
+# 同じフォルダにある `_tweets_raw.json` (JSで保存したファイル) を探し、
+# 画像をダウンロードして、閲覧用ビューワー向けの形式に変換・統合します。
+# ==============================================================
 
 def get_extension_from_url(url):
-    """URLから拡張子を推測"""
+    """URL文字列からファイルの拡張子(.jpg, .png等)を推測する関数"""
     try:
         parsed = urlparse(url)
         path_ext = os.path.splitext(parsed.path)[1]
@@ -23,7 +25,7 @@ def get_extension_from_url(url):
     return ".jpg"
 
 def convert_to_orig_url(url):
-    """画像はorigに、動画(mp4)はそのまま返す"""
+    """画像のURLを最高画質(orig)のURLに変換する関数"""
     if ".mp4" in url: return url
     if "twimg.com" not in url: return url
     try:
@@ -38,7 +40,7 @@ def convert_to_orig_url(url):
     return url
 
 def download_file(url, save_dir, tweet_id, index):
-    """画像をダウンロード"""
+    """指定されたURLの画像・動画をダウンロードし、ローカルに保存する関数"""
     if not url: return None
     
     headers = {
@@ -57,7 +59,6 @@ def download_file(url, save_dir, tweet_id, index):
 
         response = requests.get(orig_url, headers=headers, stream=True, timeout=20)
         
-        # 404エラー時のリトライ（画像のみ）
         if response.status_code != 200 and ".mp4" not in url:
             if url != orig_url:
                 response = requests.get(url, headers=headers, stream=True, timeout=20)
@@ -81,9 +82,10 @@ def download_file(url, save_dir, tweet_id, index):
     return None
 
 def merge_posts(existing_posts, new_posts):
-    """新旧データのマージ"""
+    """既存の投稿リストと新しい投稿リストをマージする関数"""
     post_map = {p["id"]: p for p in existing_posts if "id" in p}
     new_count = 0
+    
     for p in new_posts:
         if p["id"] not in post_map:
             post_map[p["id"]] = p
@@ -92,6 +94,7 @@ def merge_posts(existing_posts, new_posts):
             post_map[p["id"]].update(p)
 
     merged_list = list(post_map.values())
+    
     def parse_date(date_str):
         if not date_str: return datetime.min
         try: return datetime.fromisoformat(date_str.replace("Z", "+00:00"))
@@ -101,10 +104,12 @@ def merge_posts(existing_posts, new_posts):
     return merged_list, new_count
 
 def update_profile_history(existing_meta, new_info, image_dir):
-    """プロフィール履歴の更新（フォロー数なども記録）"""
+    """
+    プロフィールの変遷を管理する関数。
+    戻り値: (historyリスト, 変更があったかどうかのBool値)
+    """
     history = existing_meta.get("profile_history", [])
     
-    # アイコン保存
     profile_img_dir = os.path.join(image_dir, "profile")
     if not os.path.exists(profile_img_dir):
         os.makedirs(profile_img_dir)
@@ -117,27 +122,43 @@ def update_profile_history(existing_meta, new_info, image_dir):
         "name": new_info.get("name", ""),
         "screen_name": new_info.get("screenName", ""),
         "avatar": local_avatar or "",
-        "following": new_info.get("following", "0"), # 追加
-        "followers": new_info.get("followers", "0")  # 追加
+        "following": str(new_info.get("following", "0")), # 文字列として統一
+        "followers": str(new_info.get("followers", "0"))  # 文字列として統一
     }
 
     if not history:
         history.append(current_entry)
         print("   >>> プロフィール情報を記録しました。")
-    else:
-        last_entry = history[0]
-        # 名前かIDが変わっている場合は履歴に追加
-        is_changed = (last_entry["name"] != current_entry["name"]) or \
-                     (last_entry["screen_name"] != current_entry["screen_name"])
-        
-        if is_changed:
-            history.insert(0, current_entry)
-            print("   >>> プロフィール変更を検知！履歴に追加しました。")
-        else:
-            # 名前が変わっていない場合でも、最新の数値（フォロー・フォロワー）で更新する
-            history[0].update(current_entry)
+        return history, True # 新規作成なので変更あり
 
-    return history
+    last_entry = history[0]
+    
+    # 1. 重要な変更（名前やID）→ 履歴に追加
+    is_structural_change = (last_entry["name"] != current_entry["name"]) or \
+                           (last_entry["screen_name"] != current_entry["screen_name"])
+    
+    if is_structural_change:
+        history.insert(0, current_entry)
+        print("   >>> プロフィール変更を検知！履歴に追加しました。")
+        return history, True # 変更あり
+
+    # 2. 数値やアイコンの変更 → 最新の履歴を更新
+    # 比較のために既存データも文字列化しておく
+    last_following = str(last_entry.get("following", "0"))
+    last_followers = str(last_entry.get("followers", "0"))
+    last_avatar = last_entry.get("avatar", "")
+
+    is_stat_changed = (last_following != current_entry["following"]) or \
+                      (last_followers != current_entry["followers"]) or \
+                      (last_avatar != current_entry["avatar"])
+
+    if is_stat_changed:
+        history[0].update(current_entry)
+        # 数値が変わっただけでも「変更あり」とする
+        return history, True 
+    
+    # 変更なし
+    return history, False
 
 def process_file(input_file):
     print(f"\n>>> 入力ファイルを処理中: {input_file}")
@@ -153,7 +174,6 @@ def process_file(input_file):
     target_user = raw_data.get("meta", {}).get("target", "unknown")
     user_info = raw_data.get("meta", {}).get("user_info", {})
     
-    # 保存先設定
     output_file = f"{target_user}_data.json"
     image_dir = f"{target_user}_images"
 
@@ -171,12 +191,25 @@ def process_file(input_file):
                 existing_posts = d.get("posts", [])
         except: pass
 
-    # --- プロフィール履歴の更新 ---
-    profile_history = update_profile_history(existing_meta, user_info, image_dir)
+    # --- プロフィール履歴の更新 (変更有無を取得) ---
+    profile_history, profile_changed = update_profile_history(existing_meta, user_info, image_dir)
 
-    # --- データのマージ ---
+    # --- ポストのマージ ---
     merged_posts, new_count = merge_posts(existing_posts, raw_data.get("posts", []))
     print(f"   ポスト追加: {new_count}件 / 総数: {len(merged_posts)}件")
+
+    # --- 更新日時の決定 ---
+    # 新しいポストがある OR プロフィールに変更がある OR 初回作成 の場合のみ現在時刻に更新
+    previous_updated = existing_meta.get("last_updated")
+    
+    if new_count > 0 or profile_changed or not previous_updated:
+        last_updated_date = datetime.now().isoformat()
+        update_status = "更新"
+    else:
+        last_updated_date = previous_updated
+        update_status = "維持"
+    
+    print(f"   データ更新日時: {update_status} ({last_updated_date})")
 
     # --- 画像ダウンロード ---
     success_dl = 0
@@ -185,7 +218,6 @@ def process_file(input_file):
         image_urls = post.get("images", [])
         local_images = []
         
-        # 未DL（http開始）があるかチェック
         needs_dl = any(url.startswith("http") for url in image_urls)
         
         if not needs_dl:
@@ -207,14 +239,13 @@ def process_file(input_file):
             post["images"] = local_images
 
     # --- 保存 ---
-    # user_info を meta に含めることで、ビューワーが即座に数字を読めるようにする
     output_data = {
         "meta": {
             "target_user": target_user,
-            "last_updated": datetime.now().isoformat(),
+            "last_updated": last_updated_date, # 計算した日時を使用
             "total_posts_retrieved": len(merged_posts),
             "profile_history": profile_history,
-            "user_info": user_info # 最新のユーザー情報を保存
+            "user_info": user_info
         },
         "posts": merged_posts
     }
