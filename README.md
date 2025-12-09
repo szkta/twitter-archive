@@ -81,6 +81,8 @@ pip install requests
   ├── app-save.js             # (ブラウザで使用)
   ├── app-jsonparse.py        # (実行用スクリプト)
   ├── index.html              # (閲覧用ビューワー)
+  ├── script.js               # (ビューワー用プログラム)
+  ├── style.css               # (ビューワーデザイン)
   │
   ├── userA_tweets_raw.json   # Step1で保存した生データ
   ├── userA_data.json         # Step2で生成された閲覧用データ
