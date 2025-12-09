@@ -17,8 +17,8 @@
         if (!TARGET_ID) {
             const searchInput = document.querySelector('input[data-testid="SearchBox_Search_Input"]');
             if (searchInput && searchInput.value.includes('from:')) {
-                 const match = searchInput.value.match(/from:@([a-zA-Z0-9_]+)/i);
-                 if (match) TARGET_ID = match[1];
+                const match = searchInput.value.match(/from:@([a-zA-Z0-9_]+)/i);
+                if (match) TARGET_ID = match[1];
             }
         }
     } else {
@@ -58,7 +58,7 @@
             const img = avatarContainer.querySelector('img');
             if (img) avatarUrl = img.src;
         }
-        // 名前
+        // 名前（プロフィール画面用）
         const primaryCol = document.querySelector('div[data-testid="primaryColumn"]');
         if (primaryCol) {
             const nameEl = primaryCol.querySelector('div[data-testid="UserName"] span span');
@@ -67,9 +67,12 @@
     } catch(e) {}
 
     // 2. 取得できなかった場合（検索画面など）、ユーザーに入力してもらう
+    // ※ 検索画面ではここで一旦 "0" のまま進み、後述のgetTweetData内で補完されることを期待します
     if (followingCount === "0" || followersCount === "0") {
-        const inputFollowing = prompt(`@${TARGET_ID} の【フォロー数】を入力してください\n(例: 116)`, followingCount !== "0" ? followingCount : "");
-        const inputFollowers = prompt(`@${TARGET_ID} の【フォロワー数】を入力してください\n(例: 1,160)`, followersCount !== "0" ? followersCount : "");
+        // ここでのプロンプトは邪魔になる可能性があるため、検索画面で運用する場合はコメントアウトしても良いかもしれません
+        // 今回は元のロジックを維持します
+        const inputFollowing = prompt(`@${TARGET_ID} の【フォロー数】を入力してください\n(例: 212)`, followingCount !== "0" ? followingCount : "");
+        const inputFollowers = prompt(`@${TARGET_ID} の【フォロワー数】を入力してください\n(例: 2,381)`, followersCount !== "0" ? followersCount : "");
         
         if (inputFollowing) followingCount = inputFollowing;
         if (inputFollowers) followersCount = inputFollowers;
@@ -136,19 +139,38 @@
             }
             if (!isTargetUser) return null;
 
-            // ツイートからのプロフィール補完（アイコンがまだ取れていない場合のみ）
+            // --- 修正箇所ここから ---
+            
+            // 1. アイコンの補完
             if (!profileData.avatarUrl) { 
                 try {
                     const avatarImg = article.querySelector('div[data-testid="Tweet-User-Avatar"] img');
                     if (avatarImg) profileData.avatarUrl = avatarImg.src;
-                    
-                    // 名前も念のため
+                } catch (e) {}
+            }
+
+            // 2. 名前の補完
+            // プロフィールデータがまだIDのままであれば、ツイート情報から取得を試みる
+            if (profileData.name === TARGET_ID) {
+                try {
                     const userNameDiv = article.querySelector('div[data-testid="User-Name"]');
-                    if (userNameDiv && profileData.name === TARGET_ID) {
-                        profileData.name = userNameDiv.innerText.split('\n')[0];
+                    if (userNameDiv) {
+                        // 【変更点】
+                        // div全体のinnerTextではなく、内部にある最初のアンカータグ(a)のテキストを取得する。
+                        // 検索画面の構造では、最初のaタグが表示名、次の要素が@IDとなっているため。
+                        const nameAnchor = userNameDiv.querySelector('a');
+                        if (nameAnchor) {
+                            const nameText = nameAnchor.innerText;
+                            if (nameText) {
+                                profileData.name = nameText;
+                                console.log("ユーザー名を補完しました:", nameText); // 確認用ログ
+                            }
+                        }
                     }
                 } catch (e) {}
             }
+            
+            // --- 修正箇所ここまで ---
 
             const textEl = article.querySelector('div[data-testid="tweetText"]');
             let text = "";
@@ -242,5 +264,4 @@
     link.download = `${TARGET_ID}_tweets_raw.json`;
     link.click();
     console.log(`>>> 完了！ ${result.posts.length} 件のデータを保存しました。`);
-
 })();
