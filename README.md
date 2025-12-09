@@ -55,7 +55,7 @@ pip install requests
 
 > **Note:** 過去に取得したデータがある状態で再度実行すると、差分（新しいツイート）のみを追加・更新します。
 
-### Step 3: アーカイブの閲覧 (`index.html`)
+### Step 3: アーカイブの閲覧 (`index.html`, `script.js`, `style.css`)
 
 専用のビューワーで保存したデータを閲覧します。
 
