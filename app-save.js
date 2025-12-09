@@ -1,6 +1,6 @@
 (async function() {
     // --- 設定 ---
-    const SCROLL_DELAY = 3000;
+    const SCROLL_DELAY = 3000; // スクロール待機時間(ミリ秒)
     // ------------
 
     // 1. URLからターゲットIDを特定
@@ -30,64 +30,95 @@
         return;
     }
 
-    // --- プロフィール数値の取得（自動取得 or 手動入力） ---
-    let followingCount = "0";
-    let followersCount = "0";
-    let avatarUrl = "";
-    let userName = TARGET_ID;
-
-    // 1. まず現在の画面から探してみる（プロフィール画面用）
+    // --- プロフィール情報の取得 ---
+    let profileData = { name: TARGET_ID, screenName: "@" + TARGET_ID, avatarUrl: "", following: "0", followers: "0" };
+    
+    // 画面から数値などを取得
     try {
-        // フォロー数
         const followingLink = document.querySelector(`a[href*="/${TARGET_ID}/following"]`);
-        if (followingLink) {
-            const match = followingLink.innerText.match(/[\d,]+([.][\d]+)?([KMGT万億])?/);
-            if (match) followingCount = match[0];
-        }
-        // フォロワー数
-        const followersLink = document.querySelector(`a[href*="/${TARGET_ID}/verified_followers"]`) 
-                           || document.querySelector(`a[href*="/${TARGET_ID}/followers"]`);
-        if (followersLink) {
-            const match = followersLink.innerText.match(/[\d,]+([.][\d]+)?([KMGT万億])?/);
-            if (match) followersCount = match[0];
-        }
-        // アイコン
-        const avatarContainer = document.querySelector(`div[data-testid="UserAvatar-Container-${TARGET_ID}"]`) 
-                             || document.querySelector(`div[data-testid="UserAvatar-Container-${TARGET_ID.toLowerCase()}"]`);
+        if (followingLink) profileData.following = followingLink.innerText.match(/[\d,]+([.][\d]+)?([KMGT万億])?/)?.[0] || "0";
+        
+        const followersLink = document.querySelector(`a[href*="/${TARGET_ID}/verified_followers"]`) || document.querySelector(`a[href*="/${TARGET_ID}/followers"]`);
+        if (followersLink) profileData.followers = followersLink.innerText.match(/[\d,]+([.][\d]+)?([KMGT万億])?/)?.[0] || "0";
+
+        const avatarContainer = document.querySelector(`div[data-testid*="Tweet-User-Avatar"]`);
         if (avatarContainer) {
             const img = avatarContainer.querySelector('img');
-            if (img) avatarUrl = img.src;
+            if (img) profileData.avatarUrl = img.src;
         }
-        // 名前（プロフィール画面用）
-        const primaryCol = document.querySelector('div[data-testid="primaryColumn"]');
-        if (primaryCol) {
-            const nameEl = primaryCol.querySelector('div[data-testid="UserName"] span span');
-            if (nameEl) userName = nameEl.innerText;
-        }
+
+        const nameEl = document.querySelector('div[data-testid="UserName"] span span');
+        if (nameEl) profileData.name = nameEl.innerText;
     } catch(e) {}
 
-    // 2. 取得できなかった場合（検索画面など）、ユーザーに入力してもらう
-    // ※ 検索画面ではここで一旦 "0" のまま進み、後述のgetTweetData内で補完されることを期待します
-    if (followingCount === "0" || followersCount === "0") {
-        // ここでのプロンプトは邪魔になる可能性があるため、検索画面で運用する場合はコメントアウトしても良いかもしれません
-        // 今回は元のロジックを維持します
-        const inputFollowing = prompt(`@${TARGET_ID} の【フォロー数】を入力してください\n(例: 212)`, followingCount !== "0" ? followingCount : "");
-        const inputFollowers = prompt(`@${TARGET_ID} の【フォロワー数】を入力してください\n(例: 2,381)`, followersCount !== "0" ? followersCount : "");
-        
-        if (inputFollowing) followingCount = inputFollowing;
-        if (inputFollowers) followersCount = inputFollowers;
+    // 取得できない場合は入力
+    if (profileData.following === "0" || profileData.followers === "0") {
+        const inputFollowing = prompt(`@${TARGET_ID} の【フォロー数】を入力 (例: 212)`, profileData.following !== "0" ? profileData.following : "");
+        const inputFollowers = prompt(`@${TARGET_ID} の【フォロワー数】を入力 (例: 2,381)`, profileData.followers !== "0" ? profileData.followers : "");
+        if (inputFollowing) profileData.following = inputFollowing;
+        if (inputFollowers) profileData.followers = inputFollowers;
     }
 
-    const profileData = {
-        name: userName,
-        screenName: "@" + TARGET_ID,
-        avatarUrl: avatarUrl,
-        following: followingCount,
-        followers: followersCount
-    };
-
     console.log(`>>> @${TARGET_ID} の収集を開始します...`);
-    console.log("プロフィールデータ:", profileData);
+
+    // ------------------------------------------------
+    // React内部データ解析用の関数群
+    // ------------------------------------------------
+
+    // DOM要素からReactの内部インスタンス(Fiber)を取得する
+    function getReactFiber(el) {
+        const key = Object.keys(el).find(k => k.startsWith('__reactFiber') || k.startsWith('__reactInternalInstance'));
+        return key ? el[key] : null;
+    }
+
+    // Fiberツリーを遡ってツイートデータを探す
+    function findTweetDataInFiber(fiber) {
+        let curr = fiber;
+        while (curr) {
+            // legacyプロパティ（ツイート詳細）を持っているかチェック
+            const memoizedProps = curr.memoizedProps;
+            if (memoizedProps && memoizedProps.item && memoizedProps.item.content && memoizedProps.item.content.tweetResult) {
+                return memoizedProps.item.content.tweetResult.result;
+            }
+            // 直接的なtweetデータを持っている場合
+            if (memoizedProps && memoizedProps.tweet) {
+                return memoizedProps.tweet;
+            }
+            curr = curr.return; // 親ノードへ
+        }
+        return null;
+    }
+
+    // ツイートデータからメディア(動画含む)を抽出
+    function extractMediaFromData(tweetData) {
+        const mediaList = [];
+        const legacy = tweetData.legacy || tweetData; // 構造による違いを吸収
+        
+        if (legacy.extended_entities && legacy.extended_entities.media) {
+            legacy.extended_entities.media.forEach(m => {
+                // 動画(video)またはGIF(animated_gif)の場合
+                if (m.type === 'video' || m.type === 'animated_gif') {
+                    if (m.video_info && m.video_info.variants) {
+                        // 最もビットレートが高いmp4を選ぶ
+                        const variants = m.video_info.variants
+                            .filter(v => v.content_type === 'video/mp4')
+                            .sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0));
+                        
+                        if (variants.length > 0) {
+                            mediaList.push(variants[0].url);
+                        }
+                    }
+                } else if (m.media_url_https) {
+                    // 通常の画像
+                    mediaList.push(m.media_url_https);
+                }
+            });
+        } else if (legacy.entities && legacy.entities.media) {
+             // 単一画像などのフォールバック
+             legacy.entities.media.forEach(m => mediaList.push(m.media_url_https));
+        }
+        return mediaList;
+    }
 
     // ------------------------------------------------
 
@@ -116,8 +147,7 @@
                 options.push({ label: label, percent: percent });
             });
             let totalVotes = 0;
-            const footerText = pollRoot.innerText;
-            const voteMatch = footerText.match(/([\d,]+)\s*(票|votes)/);
+            const voteMatch = pollRoot.innerText.match(/([\d,]+)\s*(票|votes)/);
             if (voteMatch) totalVotes = parseInt(voteMatch[1].replace(/,/g, ''), 10);
             if (options.length > 0) return { options: options, total_votes: totalVotes };
         } catch (e) { return null; }
@@ -139,39 +169,17 @@
             }
             if (!isTargetUser) return null;
 
-            // --- 修正箇所ここから ---
-            
-            // 1. アイコンの補完
-            if (!profileData.avatarUrl) { 
-                try {
-                    const avatarImg = article.querySelector('div[data-testid="Tweet-User-Avatar"] img');
-                    if (avatarImg) profileData.avatarUrl = avatarImg.src;
-                } catch (e) {}
+            // 名前などの補完
+            if (!profileData.avatarUrl) {
+                const img = article.querySelector('div[data-testid="Tweet-User-Avatar"] img');
+                if (img) profileData.avatarUrl = img.src;
             }
-
-            // 2. 名前の補完
-            // プロフィールデータがまだIDのままであれば、ツイート情報から取得を試みる
             if (profileData.name === TARGET_ID) {
-                try {
-                    const userNameDiv = article.querySelector('div[data-testid="User-Name"]');
-                    if (userNameDiv) {
-                        // 【変更点】
-                        // div全体のinnerTextではなく、内部にある最初のアンカータグ(a)のテキストを取得する。
-                        // 検索画面の構造では、最初のaタグが表示名、次の要素が@IDとなっているため。
-                        const nameAnchor = userNameDiv.querySelector('a');
-                        if (nameAnchor) {
-                            const nameText = nameAnchor.innerText;
-                            if (nameText) {
-                                profileData.name = nameText;
-                                console.log("ユーザー名を補完しました:", nameText); // 確認用ログ
-                            }
-                        }
-                    }
-                } catch (e) {}
+                const nameAnchor = article.querySelector('div[data-testid="User-Name"] a');
+                if (nameAnchor) profileData.name = nameAnchor.innerText;
             }
-            
-            // --- 修正箇所ここまで ---
 
+            // テキスト取得
             const textEl = article.querySelector('div[data-testid="tweetText"]');
             let text = "";
             if (textEl) {
@@ -189,17 +197,30 @@
             const tweetUrl = timeEl.closest('a').getAttribute('href');
             const id = tweetUrl.split('/').pop();
 
-            const images = [];
-            article.querySelectorAll('div[data-testid="tweetPhoto"] img').forEach(img => {
-                let src = img.src;
-                if (src.includes('tweet_video_thumb')) {
-                    const mp4Src = src.replace('pbs.twimg.com/tweet_video_thumb', 'video.twimg.com/tweet_video')
-                                      .replace(/\.(jpg|png|webp).*/, '.mp4');
-                    images.push(mp4Src);
-                } else {
-                    images.push(src);
+            // === メディア取得の強化部分 ===
+            let images = [];
+            
+            // A. React内部データから高画質動画・画像を探す (推奨)
+            const fiber = getReactFiber(article);
+            const tweetInternalData = findTweetDataInFiber(fiber);
+            if (tweetInternalData) {
+                const mediaFromReact = extractMediaFromData(tweetInternalData);
+                if (mediaFromReact.length > 0) {
+                    images = mediaFromReact;
                 }
-            });
+            }
+
+            // B. もしReact解析に失敗したら、画面上のimgタグから取得 (フォールバック)
+            if (images.length === 0) {
+                article.querySelectorAll('div[data-testid="tweetPhoto"] img').forEach(img => {
+                    let src = img.src;
+                    if (src.includes('tweet_video_thumb')) {
+                        // GIF動画の簡易変換
+                        src = src.replace('pbs.twimg.com/tweet_video_thumb', 'video.twimg.com/tweet_video').replace(/\.[^.]+$/, '.mp4');
+                    }
+                    images.push(src);
+                });
+            }
 
             const poll = getPollData(article);
             const getMetric = (testId) => {
@@ -212,7 +233,7 @@
                 date: date,
                 text: text,
                 url: "https://x.com" + tweetUrl,
-                images: images,
+                images: images, // 重複除去やmp4が優先されている
                 poll: poll,
                 metrics: {
                     reply: getMetric("reply"),
@@ -230,7 +251,7 @@
             if (data && !collectedTweets.has(data.id)) {
                 collectedTweets.set(data.id, data);
                 let info = "";
-                if (data.images.some(u => u.endsWith('.mp4'))) info += "[GIF] ";
+                if (data.images.some(u => u.includes('.mp4'))) info += "[動画] ";
                 if (data.poll) info += "[投票] ";
                 console.log(`取得: ${info}${data.text.substring(0, 15)}...`);
             }
