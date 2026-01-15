@@ -1,7 +1,23 @@
 (async function() {
     // --- 設定 ---
     const SCROLL_DELAY = 3000; // スクロール待機時間(ミリ秒)
-    // ------------
+    
+    // ==========================================
+    // 追加機能: 日数指定による収集範囲の制限
+    // ==========================================
+    const daysInput = prompt("【日数指定】\n何日分さかのぼって保存しますか？\n\n・入力あり (例: 30) → 直近30日分のみ保存\n・入力なし (空欄/キャンセル) → 全ツイート保存", "");
+    
+    let cutoffDate = null;
+    if (daysInput && /^\d+$/.test(daysInput) && parseInt(daysInput) > 0) {
+        cutoffDate = new Date();
+        cutoffDate.setDate(cutoffDate.getDate() - parseInt(daysInput));
+        // 時間を00:00:00にして、指定日の開始時点より前かを判定できるようにする
+        cutoffDate.setHours(0, 0, 0, 0);
+        console.log(`>>> 設定: 直近 ${daysInput} 日間 (${cutoffDate.toLocaleString()} 以降) のツイートのみを収集します。`);
+    } else {
+        console.log(">>> 設定: 期間指定なし。可能な限りすべてのツイートを収集します。");
+    }
+    // ==========================================
 
     // 1. URLからターゲットIDを特定
     let TARGET_ID = "";
@@ -65,41 +81,34 @@
     // React内部データ解析用の関数群
     // ------------------------------------------------
 
-    // DOM要素からReactの内部インスタンス(Fiber)を取得する
     function getReactFiber(el) {
         const key = Object.keys(el).find(k => k.startsWith('__reactFiber') || k.startsWith('__reactInternalInstance'));
         return key ? el[key] : null;
     }
 
-    // Fiberツリーを遡ってツイートデータを探す
     function findTweetDataInFiber(fiber) {
         let curr = fiber;
         while (curr) {
-            // legacyプロパティ（ツイート詳細）を持っているかチェック
             const memoizedProps = curr.memoizedProps;
             if (memoizedProps && memoizedProps.item && memoizedProps.item.content && memoizedProps.item.content.tweetResult) {
                 return memoizedProps.item.content.tweetResult.result;
             }
-            // 直接的なtweetデータを持っている場合
             if (memoizedProps && memoizedProps.tweet) {
                 return memoizedProps.tweet;
             }
-            curr = curr.return; // 親ノードへ
+            curr = curr.return;
         }
         return null;
     }
 
-    // ツイートデータからメディア(動画含む)を抽出
     function extractMediaFromData(tweetData) {
         const mediaList = [];
-        const legacy = tweetData.legacy || tweetData; // 構造による違いを吸収
+        const legacy = tweetData.legacy || tweetData;
         
         if (legacy.extended_entities && legacy.extended_entities.media) {
             legacy.extended_entities.media.forEach(m => {
-                // 動画(video)またはGIF(animated_gif)の場合
                 if (m.type === 'video' || m.type === 'animated_gif') {
                     if (m.video_info && m.video_info.variants) {
-                        // 最もビットレートが高いmp4を選ぶ
                         const variants = m.video_info.variants
                             .filter(v => v.content_type === 'video/mp4')
                             .sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0));
@@ -109,12 +118,10 @@
                         }
                     }
                 } else if (m.media_url_https) {
-                    // 通常の画像
                     mediaList.push(m.media_url_https);
                 }
             });
         } else if (legacy.entities && legacy.entities.media) {
-             // 単一画像などのフォールバック
              legacy.entities.media.forEach(m => mediaList.push(m.media_url_https));
         }
         return mediaList;
@@ -125,6 +132,8 @@
     const collectedTweets = new Map();
     let lastHeight = 0;
     let noChangeCount = 0;
+    let consecutiveOldTweetsCount = 0; // 指定日付より古いツイートが連続した回数
+    let stopScraping = false; // ループ停止フラグ
 
     function getPollData(article) {
         try {
@@ -169,7 +178,6 @@
             }
             if (!isTargetUser) return null;
 
-            // 名前などの補完
             if (!profileData.avatarUrl) {
                 const img = article.querySelector('div[data-testid="Tweet-User-Avatar"] img');
                 if (img) profileData.avatarUrl = img.src;
@@ -179,7 +187,6 @@
                 if (nameAnchor) profileData.name = nameAnchor.innerText;
             }
 
-            // テキスト取得
             const textEl = article.querySelector('div[data-testid="tweetText"]');
             let text = "";
             if (textEl) {
@@ -197,10 +204,7 @@
             const tweetUrl = timeEl.closest('a').getAttribute('href');
             const id = tweetUrl.split('/').pop();
 
-            // === メディア取得の強化部分 ===
             let images = [];
-            
-            // A. React内部データから高画質動画・画像を探す (推奨)
             const fiber = getReactFiber(article);
             const tweetInternalData = findTweetDataInFiber(fiber);
             if (tweetInternalData) {
@@ -210,12 +214,10 @@
                 }
             }
 
-            // B. もしReact解析に失敗したら、画面上のimgタグから取得 (フォールバック)
             if (images.length === 0) {
                 article.querySelectorAll('div[data-testid="tweetPhoto"] img').forEach(img => {
                     let src = img.src;
                     if (src.includes('tweet_video_thumb')) {
-                        // GIF動画の簡易変換
                         src = src.replace('pbs.twimg.com/tweet_video_thumb', 'video.twimg.com/tweet_video').replace(/\.[^.]+$/, '.mp4');
                     }
                     images.push(src);
@@ -233,7 +235,7 @@
                 date: date,
                 text: text,
                 url: "https://x.com" + tweetUrl,
-                images: images, // 重複除去やmp4が優先されている
+                images: images,
                 poll: poll,
                 metrics: {
                     reply: getMetric("reply"),
@@ -246,9 +248,36 @@
 
     while (true) {
         const articles = document.querySelectorAll('article[data-testid="tweet"]');
+        
         articles.forEach(article => {
+            if (stopScraping) return; // 既に停止フラグが立っていたら処理しない
+
             const data = getTweetData(article);
             if (data && !collectedTweets.has(data.id)) {
+                
+                // === 日付チェック機能 ===
+                if (cutoffDate) {
+                    const tweetDate = new Date(data.date);
+                    if (tweetDate < cutoffDate) {
+                        // 指定日より古いツイートの場合
+                        consecutiveOldTweetsCount++;
+                        
+                        // 連続して古いツイートが見つかったら収集停止とみなす
+                        // (固定ツイートなどは古くても1つだけなので、連続5件を閾値とする)
+                        if (consecutiveOldTweetsCount >= 5) {
+                            stopScraping = true;
+                        }
+                        
+                        // 保存対象にしないため、ここで return
+                        return;
+                    } else {
+                        // 新しいツイートが見つかったらカウンターをリセット
+                        // (固定ツイートより下のタイムラインがまだ新しい場合など)
+                        consecutiveOldTweetsCount = 0;
+                    }
+                }
+                // ========================
+
                 collectedTweets.set(data.id, data);
                 let info = "";
                 if (data.images.some(u => u.includes('.mp4'))) info += "[動画] ";
@@ -256,6 +285,12 @@
                 console.log(`取得: ${info}${data.text.substring(0, 15)}...`);
             }
         });
+
+        // 日付制限により停止する場合
+        if (stopScraping) {
+            console.log(">>> 指定された期間を過ぎたため、収集を終了します。");
+            break;
+        }
 
         window.scrollTo(0, document.body.scrollHeight);
         await new Promise(r => setTimeout(r, SCROLL_DELAY));
